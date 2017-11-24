@@ -1,6 +1,6 @@
 let express = require('express'),
     path = require('path'),
-    favicon = require('serve-favicon'),
+    //favicon = require('serve-favicon'),
     logger = require('morgan'),
     Log = require('./services/logToFile'),
     app = express(),
@@ -29,8 +29,42 @@ app.use(function(err, req, res, next) {
   res.status(err.status || 500);
   Log.log('Error: ' + err.message);
 });
-let f = ()=>{setTimeout(()=>ETH.transactionsToDB(f),1000*10)};
+
+/*******************************
+* REAL TIME ETHERNET SCANNING
+*/
+//let f = ()=>{setTimeout(()=>ETH.transactionsToDB(f),1000*10)};
 //ETH.transactionsToDB(f);
-ETH.transactionToDBHistory();
+
+/*****************************************
+ * DATABASE CHECKING FOR ACTUAL TXs
+ */
+
+//ETH.checkBlockTxCount(1900000,1910000,()=>console.log('DONE!!!!!!!'));
+
+/*********************************************
+ * DATABASE FILLING FROM BLOCKCHAIN START
+ */
+
+const box = 50;
+let fn = (k)=>{
+              if(k < 2126000)
+                setTimeout(()=>{
+                  ETH.transactionsToDBHistory(k,k + box-1,
+                    ()=>fn(k + box))
+                  },1000*0.01);
+              else {
+                  Log.log('Done          UUUUUUUUUUUUUUUUU');
+                  console.log('Done          UUUUUUUUUUUUUUUUU');
+              }
+            };
+const ks = 0;
+ETH.transactionsToDBHistory(ks,ks + box-1,
+    ()=>fn(ks + box));
+
+/*******************************************
+ * RESCAN BAD BLOCKS
+ * */
+ETH.rescanBadBlocks(Log.log('Rescan bad blocks FINISH!!!!!!!'));
 
 module.exports = app;

@@ -1,9 +1,20 @@
 let Log = require('../services/logToFile'),
-    db = require('../services/db'),
+    EtherTXDB = require('../services/EtherTXDB'),
+    BadBlock = require('../services/badBlocks');
+//    parallel = require('run-parallel'),
     Web3 = require('web3');
+//const { fork } = require('child_process');
 
 module.exports = {
     web3: null,
+    instWeb3:function(){
+        if (this.web3 !== null) {
+            this.web3 = new Web3(this.web3.currentProvider);
+        } else {
+            this.web3 = new Web3(new Web3.providers.HttpProvider('http://localhost:8545'));
+        }
+        return this.web3.isConnected()?this.web3:null;
+    },
     connect:function(){
         if (this.web3 !== null) {
             this.web3 = new Web3(this.web3.currentProvider);
@@ -13,93 +24,162 @@ module.exports = {
         return this.web3.isConnected();
     },
     transactionsToDB:function(next){
-        db.get('etherTransactions').find({},{sort:{blockNumber:-1},limit:1},(err,tx)=>{
-            if(err) Log.log(err.message);
-            else {
-                if(!this.connect()) {Log.log('Geth connection error!');next();}
-                else{
+        Log.log('Start transactionsToDB...');
+        EtherTXDB.find({}).select('blockNumber').sort({blockNumber:-1}).limit(1).exec((err,tx)=>{
+            if(err || !tx || !tx.length) {
+                Log.error('DATABASE OR QUERY ERROR ' + err.message);
+                next();
+            }
+            else if(!this.connect())
+                {
+                    Log.error('Geth connection error!');
+                    next();
+                }else{
                     let web3 = this.web3;
                     web3.eth.getBlock('latest',(err,latestBlock)=>{
-                        Log.log('Block [' + latestBlock.number + ']');
-                        if(err){Log.log('Web3.eth.getBlock error!');next();}
-                        else this.fillFastDB(tx[0].blockNumber,latestBlock.number,next);
+                        if(err || !latestBlock)
+                        {
+                            Log.error('web3.eth.getBlock("latest") error');
+                            next();
+                        }else
+                        {
+                            let bNum = tx[0] ? tx[0].blockNumber : latestBlock.number - 1;
+                            Log.log('Block [' + latestBlock.number + '] ' + tx.length);
+                            if (err) {
+                                Log.log('Web3.eth.getBlock error!');
+                                next();
+                            }
+                            else if (latestBlock.number - bNum > 0) {
+                                Log.log('In');
+                                this.transactionsToDBHistory(bNum, latestBlock.number,[], next);
+                            }
+                            else next();
+                        }
                     });
                 }
-            }
         });
 
     },
-    transactionToDBHistory:function(){
+    transactionsToDBHistory:function(finish,start,next) {
+        Log.log(finish + ' Start...');
+        //const txs = [];
+        //let blockCount = 0;
+        let badBlocks = [];
+        const web3 = this.instWeb3();
+        if (!web3) {
+            Log.log('Geth NOT CONNECTED!    FINISH: '
+                + finish + ' START: ' + start);
+            this.transactionsToDBHistory(finish,start,next);
+        }else if(finish >= start) next();
+        else
+            for (let i = finish; i <= start; i++)
+                web3.eth.getBlock(i, true, (err, block) => {
+                    if (err || !block)
+                            badBlocks.push({blockNumber:i});
+                    else if(!block.transactions.length) Log.log('Empty block ' + i);
+                    else {
+                        Log.log('Block N: ' + block.number);
+                        let data = block.transactions.map(tx => {
+                            tx.timestamp = block.timestamp;
+                            return tx;
+                        });
+                        /*let up = (k, utx, callba) => {
+                            if (k >= utx.length) callba();
+                            else
+                                coll.update({hash: utx[k].hash}, utx[k], {upsert: true}, (err, t) => {
+                                    if (err) console.log(err);
+                                    up(++k, utx, callba);
+                                });
+                        };
+                        up(0, data, () => {console.log(' test ' + i + ' ' + start);
+                            if (i >= start) {
+                                console.log(i + ' FINISH !!!');
+                                Log.log(i + ' FINISH !!!');
+                                //next();
+                            } else console.log(i + ' Done.');
+                        });*/
+                        EtherTXDB.insertMany(data, (err, t) => {
+                            if (err) console.log(err);
+                            Log.log(i + ' FINISH !!!');
+                        });
+                    }
+                    if (i === start)
+                        if(badBlocks.length)
+                            BadBlock.insertMany(badBlocks,(err,bb)=>{
+                            if (err) Log.error('Bad Blocks don\'t save.');
+                            else next();
+                        });
+                        else next();
 
-                if(!this.connect()) {Log.log('Geth connection error!');}
-                else{
-                    let web3 = this.web3;
-                    web3.eth.getBlock('latest',(err,latestBlock)=>{
-                        Log.log('Block [' + 2049582 + ']');
-                        if(err){Log.log('Web3.eth.getBlock error!');}
-                        else this.fillFastDB(2035000,2049582,()=>console.log('done...'));
-                    });
-                }
-    },
-    fillDB:function(blockFinish,blockStart,next){
-        let web3 = this.web3;
-        web3.eth.getBlock(blockStart,(err,b)=>{
-            if(err && blockStart > blockFinish) this.fillDB(blockFinish,
-                (blockStart - 1),next);
-            else if(blockFinish === blockStart) next();
-            else {
-                ftl = (txList, index, nx) => {
-                    if (index === txList.length) nx();
-                    else web3.eth.getTransaction(txList[index], (err, tx) => {
-                        if (err) ftl(txList, ++index, nx);
-                        else /*if(!tx.to)ftl(txList, ++index, nx);
-                        else*/{
-                            tx.timestamp = b.timestamp;
-                            db.get('etherTransactions').update({
-                                hash: tx.hash
-                            },tx,{upsert:true},(err,t)=>{//console.dir(t);
-                                Log.log('Block: '+ blockStart + ' TxN: '
-                                    + index);
-                                ftl(txList, ++index, nx);
-                            })
-                        }
-                    })
-                };
-                ftl(b.transactions,0,()=>{
-                    this.fillDB(blockFinish,(blockStart - 1), next)
                 })
-            }
-        })
+
     },
-    fillFastDB:function(blockFinish, blockStart, next){
-        let web3 = this.web3;
-        web3.eth.getBlockTransactionCount(blockStart,(err,txNumber)=>{
-            if(err && blockStart > blockFinish || !txNumber) this.fillDB(blockFinish,
-                (blockStart - 1),next);
-            else if(blockFinish === blockStart) next();
-            else {Log.log('Block ' + blockStart + ' TxNum ' + txNumber);
-                let ftlf = (txNum, nx) => {
-                    if (!txNum) nx();
-                    else web3.eth.getTransactionFromBlock(blockStart,txNum, (err, tx) => {
-                        //console.dir(blockStart);console.dir(tx);
-                        if (err || !tx) ftlf((txNum - 1), nx);
-                        else /*if(!tx.to)ftl(txList, ++index, nx);
-                        else*/{
-                            tx.timestamp = blockStart.timestamp;
-                            db.get('etherTransactions').update({
-                                hash: tx.hash
-                            },tx,{upsert:true},(err,t)=>{//console.dir(t);
-                                Log.log('Block: '+ blockStart + ' TxN: '
-                                    + txNum);
-                                ftlf((txNum - 1), nx);
-                            })
-                        }
-                    })
-                };
-                ftlf(txNumber,()=>{
-                    this.fillFastDB(blockFinish,(blockStart - 1), next)
-                })
+    rescanBadBlocks:function(next){
+        BadBlock.find({},(err,bBlocks)=>{
+            if(err || !bBlocks) Log.error('Database error.');
+            else if(!bBlocks.length) Log.log('No bad blocks.');
+                else {
+                Log.log(finish + ' Start...');
+                const web3 = this.instWeb3();
+                const coll = EtherTXDB;
+                if (!web3){
+                    Log.log('Geth NOT CONNECTED!    FINISH: '
+                        + finish + ' START: ' + start);
+                    next();}
+                else
+                    for (let i = 0; i < bBlocks.length; i++)
+                        web3.eth.getBlock(bBlocks[i].blockNumber, true, (err, block) => {
+                            if (err || !block)
+                                Log.error('Still bad block! ' + bBlocks[i].blockNumber);
+                            else if(!block.transactions.length) Log.log('Empty block ' + bBlocks[i].blockNumber);
+                                else {
+                                    Log.log('Block N: ' + block.number);
+                                    let data = block.transactions.map(tx => {
+                                    tx.timestamp = block.timestamp;
+                                    return tx;
+                                });
+                                EtherTXDB.insertMany(data, (err, t) => {
+                                    if (err) Log.error('InsertMany ERROR!');
+                                    else {
+                                        BadBlock.remove({blockNumber:bBlocks[i].blockNumber},err=>{
+                                            if(err) Log.error('Removing bad block ERROR! ' + bBlocks[i].blockNumber);
+                                            else Log.log(bBlocks[i].blockNumber + ' FINISH !!!');
+                                        });
+                                    }
+                                });
+                            }
+                            if (i === bBlocks.length - 1) next();
+
+                        })
             }
-        })
-    }
+        });
+    },
+    checkBlockTxCount:function(blockFinish,blockStart,next) {
+        if (!this.connect()) {
+            console.log('NOT CONNECTED!');
+            next();
+        }
+        else {
+            let web3 = this.web3;
+            for (let i = blockFinish; i <= blockStart; i++)
+                setTimeout(()=>{
+                Log.log(i + ' block checking...');
+                EtherTXDB.find({blockNumber: i}, (err, txs) => {
+                    if (err) Log.error('Block ERROR: ' + i);
+                    else
+                        web3.eth.getBlock(i, (err, bl) => {
+                            if (err) Log.error('Block error: ' + i);
+                            else if (bl.transactions.length !== txs.length)
+                                Log.error('ICORRECT BLOCK DATA RECORD: '
+                                    + i + '/' + bl.number + ' '
+                                    + bl.transactions.length + ' ' + txs.length);
+                            if (i === blockStart) {
+                                Log.log(i + ' FINISH!!!');
+                                next();
+                            }
+                        })
+                });
+                }, 0.01)
+            }
+        }
 };
