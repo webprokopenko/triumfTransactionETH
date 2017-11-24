@@ -6,9 +6,6 @@
     "start": "node ./bin/www"
   },
   "dependencies": {
-    "bignumber": "^1.1.0",
-    "bluebird": "^3.5.1",
-    "debug": "~2.6.9",
     "express": "~4.15.5",
     "less-middleware": "~2.2.1",
     "mongoose": "^4.13.2",
@@ -18,7 +15,7 @@
     "run-parallel": "^1.1.6",
     "web3": "^0.19.0"
   },
-  "devDependencies": {
-    "mocha": "^4.0.1"
+  "devDependencies":{
+    "debug": "~2.6.9"
   }
 }
